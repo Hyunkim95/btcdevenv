@@ -1,0 +1,105 @@
+version: "3.2"
+
+services:
+  bitcoin:
+    image: bitcoin:latest
+    container_name: bitcoin
+    stop_grace_period: 5s
+    build:
+      context: ./bitcoin/docker
+    ports:
+      - 18444:18444
+      - 18443:18443
+      - 18433:18433
+    environment:
+      - "BTC_NETWORK=regtest"
+      - "BTC_DISABLEWALLET=0"
+      - "BTC_TXINDEX=1"
+      - "BTC_RPCBIND=0.0.0.0"
+      - "BTC_RPCALLOWIP=0.0.0.0/0"
+      - "BTC_RPCPASSWORD=devnet"
+      - "BTC_RPCUSER=devnet"
+  miner:
+    image: miner:latest
+    container_name: miner
+    stop_grace_period: 5s
+    build:
+      context: ./miner/docker
+    depends_on:
+      - bitcoin
+    environment:
+      INIT_BTC_BLOCKS: 200
+      BTC_BLOCK_GEN_TIME: 10
+  mempool-db:
+    image: mariadb:10.5.21
+    container_name: mempool-db
+    stop_grace_period: 5s
+    ports:
+      - 3306:3306
+    environment:
+      MYSQL_DATABASE: "mempool"
+      MYSQL_USER: "mempool"
+      MYSQL_PASSWORD: "mempool"
+      MYSQL_ROOT_PASSWORD: "admin"
+  electrs:
+    image: electrs:latest
+    container_name: electrs
+    stop_grace_period: 5s
+    build:
+      context: ./electrs/docker
+    ports:
+      - 60401:60401
+      - 3002:3002
+  mempool-web:
+    image: mempool/frontend:latest
+    container_name: mempool-web
+    stop_grace_period: 5s
+    depends_on:
+      - mempool-api
+      - mempool-db
+    user: "1000:1000"
+    restart: on-failure
+    ports:
+      - 8083:8083
+    environment:
+      FRONTEND_HTTP_PORT: "8083"
+      BACKEND_MAINNET_HTTP_HOST: "mempool-api"
+    command: "./wait-for mempool-db:3306 --timeout=720 -- nginx -g 'daemon off;'"
+  ord:
+    image: zooperdooper/zooper-ord:0.1.0
+    container_name: ord
+    stop_grace_period: 5s
+    # build:
+    #   context: ./ord/docker
+    depends_on:
+      - bitcoin
+    ports:
+      - 8080:8080
+    command: "ord --index-addresses --index-sats --index-transactions --bitcoin-rpc-username devnet --bitcoin-rpc-password devnet --chain regtest --bitcoin-rpc-url bitcoin:18443 server --http-port=8080"
+  mempool-api:
+    image: mempool/backend:latest
+    container_name: mempool-api
+    stop_grace_period: 5s
+    depends_on:
+      - electrs
+      - mempool-db
+    user: "1000:1000"
+    restart: on-failure
+    ports:
+      - 8999:8999
+    environment:
+      MEMPOOL_BACKEND: "electrum"
+      ELECTRUM_HOST: "electrs"
+      ELECTRUM_PORT: "60401"
+      ELECTRUM_TLS_ENABLED: "false"
+      CORE_RPC_HOST: "bitcoin"
+      CORE_RPC_PORT: "18443"
+      CORE_RPC_USERNAME: "devnet"
+      CORE_RPC_PASSWORD: "devnet"
+      DATABASE_ENABLED: "true"
+      DATABASE_HOST: "mempool-db"
+      DATABASE_DATABASE: "mempool"
+      DATABASE_USERNAME: "mempool"
+      DATABASE_PASSWORD: "mempool"
+      STATISTICS_ENABLED: "true"
+    command: "./wait-for-it.sh mempool-db:3306 --timeout=720 --strict -- ./start.sh"
